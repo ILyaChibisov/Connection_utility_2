@@ -15,19 +15,22 @@ STANDARD_COLUMNS = [
     'offset', 'reg_num', 'method', 'is_virtual', 'is_commpressed'
 ]
 
-ip_list = ['192.168.4.16', '192.168.4.26', '192.168.4.61']
+ip_list = ['192.168.4.16', '192.168.4.26', '192.168.4.61', '192.168.4.116', '192.168.4.137']
 
 
 class SimpleTableWidget(QTableWidget):
-    def __init__(self, data, parent=None, chunk_data=None):
+    def __init__(self, data, parent=None, chunk_data=None, allow_add_rows=True):
         super().__init__(parent)
-        self.chunk_data = chunk_data  # Данные о чанках для комбобоксов
+        self.chunk_data = chunk_data
+        self.allow_add_rows = allow_add_rows
+        self.deleted_rows = set()  # Храним индексы удаленных строк
         self.setData(data)
 
     def setData(self, data):
         headers = data.columns.values.tolist()
-        self.setColumnCount(len(headers))
-        self.setHorizontalHeaderLabels(headers)
+        headers_with_actions = headers + ['Действия']
+        self.setColumnCount(len(headers_with_actions))
+        self.setHorizontalHeaderLabels(headers_with_actions)
         self.setRowCount(len(data))
 
         for i, row in data.iterrows():
@@ -35,7 +38,6 @@ class SimpleTableWidget(QTableWidget):
                 header_name = headers[j]
 
                 if header_name in ['is_virtual', 'is_commpressed']:
-                    # Создаем чекбоксы для булевых полей
                     checkbox = QCheckBox()
                     if str(value).lower() in ['true', '1', 'yes', 't']:
                         checkbox.setChecked(True)
@@ -50,19 +52,15 @@ class SimpleTableWidget(QTableWidget):
                     self.setCellWidget(i, j, checkbox_widget)
 
                 elif header_name == 'chunk_name':
-                    # Создаем комбобокс для выбора чанка
                     combo = QComboBox()
 
-                    # Добавляем доступные чанки
                     if self.chunk_data is not None and len(self.chunk_data) > 0:
-                        # Используем правильное имя колонки из chunk_data
                         if 'chunk_name' in self.chunk_data.columns:
                             chunk_names = self.chunk_data['chunk_name'].unique().tolist()
                         else:
                             chunk_names = self.chunk_data['chunk'].unique().tolist()
                         combo.addItems(chunk_names)
 
-                    # Устанавливаем текущее значение
                     current_index = combo.findText(str(value))
                     if current_index >= 0:
                         combo.setCurrentIndex(current_index)
@@ -70,7 +68,6 @@ class SimpleTableWidget(QTableWidget):
                         combo.addItem(str(value))
                         combo.setCurrentIndex(combo.count() - 1)
 
-                    # Подключаем сигнал изменения
                     combo.currentTextChanged.connect(
                         lambda text, row_idx=i: self.on_chunk_changed(row_idx, text)
                     )
@@ -81,24 +78,41 @@ class SimpleTableWidget(QTableWidget):
                     item = QTableWidgetItem(str(value))
                     self.setItem(i, j, item)
 
+            delete_button = QPushButton("Удалить")
+            delete_button.clicked.connect(lambda checked, row_idx=i: self.delete_row(row_idx))
+            self.setCellWidget(i, len(headers), delete_button)
+
         self.resizeColumnsToContents()
+
+    def delete_row(self, row_idx):
+        """Удаляет строку из таблицы и добавляет в список удаленных"""
+        # Запоминаем, что эта строка удалена
+        self.deleted_rows.add(row_idx)
+        self.removeRow(row_idx)
+
+        # Обновляем индексы для оставшихся кнопок удаления
+        for row in range(self.rowCount()):
+            delete_button = self.cellWidget(row, self.columnCount() - 1)
+            if delete_button:
+                try:
+                    delete_button.clicked.disconnect()
+                except:
+                    pass
+                delete_button.clicked.connect(lambda checked, r=row: self.delete_row(r))
 
     def on_chunk_changed(self, row_idx, chunk_name):
         """Обработчик изменения выбранного чанка"""
         if self.chunk_data is None or chunk_name == "":
             return
 
-        # Находим информацию о выбранном чанке
         if 'chunk_name' in self.chunk_data.columns:
             chunk_info = self.chunk_data[self.chunk_data['chunk_name'] == chunk_name]
         else:
             chunk_info = self.chunk_data[self.chunk_data['chunk'] == chunk_name]
 
         if len(chunk_info) > 0:
-            # Берем первую запись (должна быть уникальной)
             chunk_row = chunk_info.iloc[0]
 
-            # Обновляем поля position, length, io
             position_item = self.item(row_idx, self.get_column_index('position'))
             length_item = self.item(row_idx, self.get_column_index('length'))
             io_item = self.item(row_idx, self.get_column_index('io'))
@@ -112,31 +126,33 @@ class SimpleTableWidget(QTableWidget):
 
     def get_column_index(self, column_name):
         """Возвращает индекс колонки по имени"""
-        for i in range(self.columnCount()):
-            if self.horizontalHeaderItem(i).text() == column_name:
-                return i
-        return -1
+        headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount() - 1)]
+        try:
+            return headers.index(column_name)
+        except ValueError:
+            return -1
 
     def add_empty_row(self):
-        current_row_count = self.rowCount()
-        self.insertRow(current_row_count)
+        """Добавляет пустую строку только по нажатию кнопки"""
+        row_index = self.rowCount()
+        self.insertRow(row_index)
 
-        headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount())]
+        headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount() - 1)]
+
         for col, header in enumerate(headers):
             if header in ['is_virtual', 'is_commpressed']:
                 checkbox = QCheckBox()
+
                 checkbox_widget = QWidget()
                 checkbox_layout = QHBoxLayout(checkbox_widget)
                 checkbox_layout.addWidget(checkbox)
                 checkbox_layout.setAlignment(Qt.AlignCenter)
                 checkbox_layout.setContentsMargins(0, 0, 0, 0)
-                self.setCellWidget(current_row_count, col, checkbox_widget)
+                self.setCellWidget(row_index, col, checkbox_widget)
 
             elif header == 'chunk_name':
-                # Создаем комбобокс для новой строки
                 combo = QComboBox()
 
-                # Добавляем доступные чанки
                 if self.chunk_data is not None and len(self.chunk_data) > 0:
                     if 'chunk_name' in self.chunk_data.columns:
                         chunk_names = self.chunk_data['chunk_name'].unique().tolist()
@@ -144,54 +160,72 @@ class SimpleTableWidget(QTableWidget):
                         chunk_names = self.chunk_data['chunk'].unique().tolist()
                     combo.addItems(chunk_names)
 
-                # Подключаем сигнал изменения
                 combo.currentTextChanged.connect(
-                    lambda text, row_idx=current_row_count: self.on_chunk_changed(row_idx, text)
+                    lambda text, row_idx=row_index: self.on_chunk_changed(row_idx, text)
                 )
 
-                self.setCellWidget(current_row_count, col, combo)
+                self.setCellWidget(row_index, col, combo)
 
             else:
                 item = QTableWidgetItem("")
-                self.setItem(current_row_count, col, item)
+                self.setItem(row_index, col, item)
+
+        delete_button = QPushButton("Удалить")
+        delete_button.clicked.connect(lambda checked, row_idx=row_index: self.delete_row(row_idx))
+        self.setCellWidget(row_index, len(headers), delete_button)
 
     def getData(self):
+        """Получает данные из таблицы, ИСКЛЮЧАЯ удаленные строки"""
         data_list = []
-        headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount())]
-
-        print(f"DEBUG: Table headers in UI: {headers}")
+        headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount() - 1)]
 
         for row in range(self.rowCount()):
+            # Пропускаем удаленные строки
+            if row in self.deleted_rows:
+                continue
+
             row_data = {}
+            is_empty_row = True
+
             for col, header in enumerate(headers):
                 if header in ['is_virtual', 'is_commpressed']:
                     checkbox_widget = self.cellWidget(row, col)
                     if checkbox_widget:
                         checkbox = checkbox_widget.layout().itemAt(0).widget()
                         row_data[header] = checkbox.isChecked()
+                        if checkbox.isChecked():
+                            is_empty_row = False
                     else:
                         row_data[header] = False
 
                 elif header == 'chunk_name':
                     combo_widget = self.cellWidget(row, col)
                     if combo_widget:
-                        row_data[header] = combo_widget.currentText()
+                        value = combo_widget.currentText()
+                        row_data[header] = value
+                        if value.strip():
+                            is_empty_row = False
                     else:
                         row_data[header] = ""
 
                 else:
                     item = self.item(row, col)
-                    row_data[header] = item.text() if item else ""
+                    value = item.text() if item else ""
+                    row_data[header] = value
+                    if value.strip():
+                        is_empty_row = False
 
-            # Выводим значения для отладки
-            if row == 0:  # только для первой строки
-                print(
-                    f"DEBUG: User input - reg_num: {row_data.get('reg_num', 'N/A')}, method: {row_data.get('method', 'N/A')}, offset: {row_data.get('offset', 'N/A')}")
+            # Добавляем только непустые строки, которые не были удалены
+            if not is_empty_row:
+                data_list.append(row_data)
 
-            data_list.append(row_data)
-
-        result_df = pd.DataFrame(data_list, columns=headers)
+        result_df = pd.DataFrame(data_list, columns=headers) if data_list else pd.DataFrame(columns=headers)
         return result_df
+
+    def has_valid_data(self):
+        """Проверяет, есть ли в таблице хотя бы одна заполненная строка"""
+        data = self.getData()
+        return len(data) > 0
 
 
 class MyWin(QtWidgets.QMainWindow):
@@ -219,21 +253,24 @@ class MyWin(QtWidgets.QMainWindow):
         self.tray_icon.show()
 
         # Подключаем кнопки
-        # self.ui.pushButton_2.clicked.connect(self.update_connections) #
-        # self.ui.pushButton_3.clicked.connect(self.data_update_connections)
         self.ui.pushButton_4.clicked.connect(self.get_chunk_info)
-        # self.ui.pushButton_5.clicked.connect(self.csv_chunk_info)
         self.ui.pushButton_6.clicked.connect(self.get_chunk_connection_info)
-        # self.ui.pushButton_7.clicked.connect(self.csv_chunk_connection_info)
         self.ui.pushButton_8.clicked.connect(self.create_new_connection)
         self.ui.pushButton_9.clicked.connect(self.refactor_connection)
-        # self.ui.pushButton_10.clicked.connect(self.get_all_connections)
         self.ui.pushButton_11.clicked.connect(self.get_chunk_connection_info_by_search)
-        self.ui.pushButton_12.clicked.connect(self.save_new_connection)
-        self.ui.pushButton_13.clicked.connect(self.save_edited_connection)
+        self.ui.pushButton_12.clicked.connect(self.save_connection)
+        self.ui.pushButton_13.clicked.connect(self.save_connection)
+
+        # Кнопки "Принять изменения" всегда видны
+        self.ui.pushButton_12.setVisible(True)
+        self.ui.pushButton_13.setVisible(True)
 
         for ip in ip_list:
             self.ui.comboBox.addItem("%s" % ip)
+
+        # Разрешаем ручной ввод IP-адреса
+        self.ui.comboBox.setEditable(True)
+        self.ui.comboBox.setInsertPolicy(QComboBox.NoInsert)
 
         self.editing_table = None
         self.current_connection_type = ""
@@ -243,12 +280,22 @@ class MyWin(QtWidgets.QMainWindow):
         # Загружаем данные о чанках при инициализации
         self.load_chunk_data()
 
+    def _get_ip(self):
+        """Возвращает IP из comboBox (выбранный или введённый вручную) с валидацией."""
+        ip = self.ui.comboBox.currentText().strip()
+        if not ip:
+            QMessageBox.warning(self, "Ошибка", "Укажите IP-адрес сервера")
+            return None
+        parts = ip.split('.')
+        if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+            QMessageBox.warning(self, "Ошибка", f"Некорректный IP-адрес: {ip}")
+            return None
+        return ip
+
     def _standardize_output(self, data):
         """Приводит вывод к стандартному формату"""
         if data is None or len(data) == 0:
             return data
-
-        print(f"DEBUG: Input data columns: {data.columns.tolist()}")
 
         # Убираем служебные колонки
         columns_to_remove = ['connection_type_id', 'chunk_id']
@@ -257,22 +304,19 @@ class MyWin(QtWidgets.QMainWindow):
         # Обратное преобразование названий колонок из БД в наш стандарт
         reverse_column_mapping = {}
 
-        # Проверяем какие колонки есть в данных и создаем mapping
         if 'connection' in data.columns:
             reverse_column_mapping['connection'] = 'connection_type'
         if 'chunk' in data.columns:
-            reverse_column_mapping['chunk'] = 'chunk_name'  # Исправлено: chunk -> chunk_name
+            reverse_column_mapping['chunk'] = 'chunk_name'
         if 'chunk_offset' in data.columns:
             reverse_column_mapping['chunk_offset'] = 'offset'
         elif 'offset' in data.columns:
-            # Если уже есть offset, оставляем как есть
             pass
         if 'is_compressed' in data.columns:
             reverse_column_mapping['is_compressed'] = 'is_commpressed'
 
         data = data.rename(columns=reverse_column_mapping)
 
-        # ВАЖНО: Исправляем порядок колонок согласно STANDARD_COLUMNS
         # Создаем новый DataFrame с правильным порядком
         result_data = pd.DataFrame()
 
@@ -280,54 +324,38 @@ class MyWin(QtWidgets.QMainWindow):
             if col in data.columns:
                 result_data[col] = data[col]
             else:
-                # Если колонка отсутствует, создаем ее с NaN значениями
                 result_data[col] = None
-
-        print(f"DEBUG: Output data columns: {result_data.columns.tolist()}")
-        if len(result_data) > 0:
-            sample_row = result_data.iloc[0]
-            print(
-                f"DEBUG: Sample values - reg_num: {sample_row.get('reg_num', 'N/A')}, method: {sample_row.get('method', 'N/A')}, offset: {sample_row.get('offset', 'N/A')}")
 
         return result_data
 
     def _prepare_data_for_save(self, data):
-        """Подготавливает данные для сохранения в БД (универсальный метод)"""
-        # ПРАВИЛЬНЫЙ ПОРЯДОК КОЛОНОК ДЛЯ БАЗЫ ДАННЫХ
+        """Подготавливает данные для сохранения в БД"""
         database_column_order = [
             'connection_type', 'chunk_name', 'position', 'length', 'io',
             'reg_num', 'method', 'offset', 'is_virtual', 'is_commpressed'
         ]
 
-        # Переименовываем колонки согласно структуре таблицы в БД
         column_mapping = {
             'connection_type': 'connection',
-            'chunk_name': 'chunk',  # Исправлено: chunk_name -> chunk
+            'chunk_name': 'chunk',
             'offset': 'chunk_offset',
             'is_commpressed': 'is_compressed'
         }
 
-        # Переупорядочиваем и переименовываем колонки
         data = data[database_column_order].rename(columns=column_mapping)
-
         return data
 
     def load_chunk_data(self):
         """Загрузка данных для выпадающих списков"""
         try:
-            print("DEBUG: Loading chunk data...")
-            ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-            raw_chunk_data = cn.connect_to_bd('', ip, user, passwd, 1)
-
-            # Стандартизируем данные о чанках
+            ip = self._get_ip()
+            if ip is None:
+                return False
+            user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+            raw_chunk_data = cn.connect_to_bd(None, ip, user, passwd, 1)
             self.chunk_data = self._standardize_chunk_data(raw_chunk_data)
-
-            print(f"DEBUG: Chunk data columns: {self.chunk_data.columns.tolist()}")
-            if len(self.chunk_data) > 0:
-                print(f"DEBUG: Sample chunk data: {self.chunk_data.iloc[0].to_dict()}")
             return True
         except Exception as e:
-            print(f"DEBUG: Error loading chunk data: {e}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить данные для выпадающих списков: {str(e)}")
             return False
 
@@ -336,28 +364,19 @@ class MyWin(QtWidgets.QMainWindow):
         if chunk_data is None or len(chunk_data) == 0:
             return chunk_data
 
-        print(f"DEBUG: Raw chunk data columns: {chunk_data.columns.tolist()}")
-
-        # Переименовываем колонки для единообразия
         chunk_mapping = {}
         if 'chunk' in chunk_data.columns:
             chunk_mapping['chunk'] = 'chunk_name'
-        if 'chunk_name' in chunk_data.columns:
-            # Уже правильное имя, оставляем как есть
-            pass
 
         if chunk_mapping:
             chunk_data = chunk_data.rename(columns=chunk_mapping)
 
-        # Оставляем только нужные колонки
         required_columns = ['chunk_name', 'position', 'length', 'io']
         for col in required_columns:
             if col not in chunk_data.columns:
                 chunk_data[col] = None
 
         chunk_data = chunk_data[required_columns]
-        print(f"DEBUG: Standardized chunk data columns: {chunk_data.columns.tolist()}")
-
         return chunk_data
 
     def clear_layout(self, layout):
@@ -369,7 +388,6 @@ class MyWin(QtWidgets.QMainWindow):
     def create_new_connection(self):
         """Создание новой схемы подключения"""
         try:
-            # Загружаем актуальные данные о чанках
             if not self.load_chunk_data():
                 return
 
@@ -382,18 +400,19 @@ class MyWin(QtWidgets.QMainWindow):
             self.current_connection_type = connection_name.strip()
             self.is_editing_mode = False
 
-            # Создаем пустой DataFrame со стандартными колонками
+            # Создаем пустой DataFrame с одной пустой строкой
             empty_data = pd.DataFrame(columns=STANDARD_COLUMNS)
             empty_data.loc[0] = [''] * len(empty_data.columns)
 
-            # Создаем редактируемую таблицу с передачей данных о чанках
             self.clear_layout(self.ui.gridLayout)
             container = QWidget()
             layout = QVBoxLayout(container)
 
-            self.editing_table = SimpleTableWidget(empty_data, chunk_data=self.chunk_data)
+            # Создаем таблицу без автоматических пустых строк
+            self.editing_table = SimpleTableWidget(empty_data, chunk_data=self.chunk_data, allow_add_rows=False)
             layout.addWidget(self.editing_table)
 
+            # Добавляем кнопку для добавления новых строк
             add_row_button = QPushButton("Добавить строку")
             add_row_button.clicked.connect(self.editing_table.add_empty_row)
             layout.addWidget(add_row_button)
@@ -401,79 +420,14 @@ class MyWin(QtWidgets.QMainWindow):
             self.ui.gridLayout.addWidget(container, 0, 0)
 
             QMessageBox.information(self, "Успех",
-                                    f"Создана новая схема '{self.current_connection_type}'. Заполните данные и нажмите 'Внести в БД'")
+                                    f"Создана новая схема '{self.current_connection_type}'. Заполните данные и нажмите 'Принять изменения' для сохранения.")
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при создании новой схемы: {str(e)}")
 
-    def save_new_connection(self):
-        """Сохранение новой схемы подключения в БД"""
-        try:
-            if self.editing_table is None or not self.current_connection_type:
-                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения")
-                return
-
-            new_data = self.editing_table.getData()
-
-            if len(new_data) == 0:
-                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения")
-                return
-
-            # Проверяем, что все поля заполнены
-            for column in new_data.columns:
-                empty_cells = new_data[column].isnull() | (new_data[column].astype(str) == '')
-                if empty_cells.any():
-                    empty_rows = empty_cells[empty_cells].index.tolist()
-                    QMessageBox.warning(self, "Ошибка",
-                                        f"Все поля должны быть заполнены. Пустые значения в колонке '{column}', строки: {[r + 1 for r in empty_rows]}")
-                    return
-
-            # Проверяем единое название схемы
-            connection_names = new_data['connection_type'].unique()
-            if len(connection_names) > 1:
-                QMessageBox.warning(self, "Ошибка",
-                                    f"Все строки должны иметь одинаковое название схемы подключения. Найдены: {', '.join(connection_names)}")
-                return
-
-            new_data['connection_type'] = self.current_connection_type
-
-            # Подготавливаем данные для БД
-            db_data = self._prepare_data_for_save(new_data)
-
-            # Сохраняем в CSV
-            temp_file = 'temp_new_connection.csv'
-            db_data.to_csv(temp_file, sep=',', index=False, encoding='utf-8')
-            print(f"DEBUG: Saving to CSV with columns: {db_data.columns.tolist()}")
-            if len(db_data) > 0:
-                print(f"DEBUG: First row values: {db_data.iloc[0].tolist()}")
-
-            # Загружаем в БД
-            ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-            result = cn.connect_to_bd(temp_file, ip, user, passwd, 0)
-
-            # Удаляем временный файл
-            import os
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-
-            # Показываем результат (стандартизированный)
-            self.clear_layout(self.ui.gridLayout)
-            result_standard = self._standardize_output(result)
-            table = ot.out_table(result_standard)
-            self.ui.gridLayout.addWidget(table, 0, 0)
-
-            QMessageBox.information(self, "Успех", "Новая схема подключения успешно добавлена в БД")
-
-            self.current_connection_type = ""
-            self.editing_table = None
-
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Ошибка при сохранении: {str(e)}")
-
     def refactor_connection(self):
         """Загрузка существующей схемы для редактирования"""
         try:
-            # Загружаем актуальные данные о чанках
             if not self.load_chunk_data():
                 return
 
@@ -483,172 +437,153 @@ class MyWin(QtWidgets.QMainWindow):
                 QMessageBox.warning(self, "Ошибка", "Введите название схемы подключения")
                 return
 
-            ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+            ip = self._get_ip()
+            if ip is None:
+                return
+            user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
 
-            data_2 = cn.connect_to_bd(path, ip, user, passwd, [connection_name])
+            # Используем точное соответствие для поиска
+            data_2 = cn.connect_to_bd(None, ip, user, passwd, 4, connection_name)
 
             if len(data_2) == 0:
                 QMessageBox.warning(self, "Ошибка", f"Схема подключения '{connection_name}' не найдена")
                 return
 
-            print(f"DEBUG: Raw data from DB columns: {data_2.columns.tolist()}")
-            if len(data_2) > 0:
-                print(
-                    f"DEBUG: Raw data values - reg_num: {data_2.iloc[0]['reg_num']}, method: {data_2.iloc[0]['method']}, chunk_offset: {data_2.iloc[0].get('chunk_offset', 'N/A')}")
-
             # Стандартизируем данные перед отображением
             data_2_standard = self._standardize_output(data_2)
 
-            print(f"DEBUG: After standardization columns: {data_2_standard.columns.tolist()}")
-            if len(data_2_standard) > 0:
-                print(
-                    f"DEBUG: Standardized values - reg_num: {data_2_standard.iloc[0]['reg_num']}, method: {data_2_standard.iloc[0]['method']}, offset: {data_2_standard.iloc[0]['offset']}")
-
             self.clear_layout(self.ui.gridLayout)
-            self.editing_table = SimpleTableWidget(data_2_standard, chunk_data=self.chunk_data)
-            self.ui.gridLayout.addWidget(self.editing_table, 0, 0)
 
-            # ВЫВЕДЕМ ЗАГОЛОВКИ ТАБЛИЦЫ ДЛЯ ПРОВЕРКИ
-            headers = [self.editing_table.horizontalHeaderItem(i).text() for i in
-                       range(self.editing_table.columnCount())]
-            print(f"DEBUG: Table headers in UI: {headers}")
+            container = QWidget()
+            layout = QVBoxLayout(container)
+
+            # Создаем таблицу без автоматических пустых строк
+            self.editing_table = SimpleTableWidget(data_2_standard, chunk_data=self.chunk_data, allow_add_rows=False)
+            layout.addWidget(self.editing_table)
+
+            # Добавляем кнопку для добавления новых строк
+            add_row_button = QPushButton("Добавить строку")
+            add_row_button.clicked.connect(self.editing_table.add_empty_row)
+            layout.addWidget(add_row_button)
+
+            self.ui.gridLayout.addWidget(container, 0, 0)
 
             self.current_connection_type = connection_name
             self.is_editing_mode = True
 
-            QMessageBox.information(self, "Успех", f"Схема '{connection_name}' загружена для редактирования")
+            QMessageBox.information(self, "Успех",
+                                    f"Схема '{connection_name}' загружена для редактирования. "
+                                    f"Вы можете добавлять новые строки с помощью кнопки 'Добавить строку'.")
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при загрузке схемы: {str(e)}")
 
-    def save_edited_connection(self):
-        """Сохранение отредактированной схемы"""
+    def save_connection(self):
+        """Сохранение схемы подключения в БД (универсальный метод)"""
         try:
             if self.editing_table is None:
-                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения")
+                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения. Сначала создайте или загрузите схему.")
                 return
 
-            edited_data = self.editing_table.getData()
+            data_to_save = self.editing_table.getData()
 
-            if len(edited_data) == 0:
-                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения")
+            if len(data_to_save) == 0:
+                QMessageBox.warning(self, "Ошибка", "Нет данных для сохранения. Заполните хотя бы одну строку.")
                 return
-
-            print(
-                f"DEBUG: Edited data from table: {edited_data.iloc[0].to_dict() if len(edited_data) > 0 else 'Empty'}")
 
             # Проверяем, что все поля заполнены
-            for column in edited_data.columns:
-                empty_cells = edited_data[column].isnull() | (edited_data[column].astype(str) == '')
-                if empty_cells.any():
-                    empty_rows = empty_cells[empty_cells].index.tolist()
-                    QMessageBox.warning(self, "Ошибка",
-                                        f"Все поля должны быть заполнены. Пустые значения в колонке '{column}', строки: {[r + 1 for r in empty_rows]}")
-                    return
+            for i, row in data_to_save.iterrows():
+                for column in data_to_save.columns:
+                    value = row[column]
+                    if pd.isna(value) or str(value).strip() == '':
+                        QMessageBox.warning(self, "Ошибка",
+                                            f"Все поля должны быть заполнены. Пустое значение в колонке '{column}', строка: {i + 1}")
+                        return
+
+            # Убеждаемся, что все строки имеют правильное название схемы
+            data_to_save['connection_type'] = self.current_connection_type
 
             # Подготавливаем данные для БД
-            db_data = self._prepare_data_for_save(edited_data)
+            db_data = self._prepare_data_for_save(data_to_save)
 
-            # Сохраняем в CSV
-            temp_file = 'temp_edited_connection.csv'
-            db_data.to_csv(temp_file, sep=',', index=False, encoding='utf-8')
-            print(f"DEBUG: Saving edited to CSV with columns: {db_data.columns.tolist()}")
-            if len(db_data) > 0:
-                print(f"DEBUG: First row values: {db_data.iloc[0].tolist()}")
+            # Загружаем в БД напрямую
+            ip = self._get_ip()
+            if ip is None:
+                return
+            user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+            result = cn.connect_to_bd(db_data, ip, user, passwd, 0)
 
-            # Загружаем в БД
-            ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-            result = cn.connect_to_bd(temp_file, ip, user, passwd, 0)
+            if 'Ошибка' in result.columns:
+                QMessageBox.critical(self, "Ошибка", f"Ошибка при сохранении в БД: {result.iloc[0]['Ошибка']}")
+                return
 
-            # Удаляем временный файл
-            import os
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-
-            # Показываем результат (стандартизированный)
+            # Показываем результат
             self.clear_layout(self.ui.gridLayout)
             result_standard = self._standardize_output(result)
             table = ot.out_table(result_standard)
             self.ui.gridLayout.addWidget(table, 0, 0)
 
-            QMessageBox.information(self, "Успех", "Схема подключения успешно обновлена")
+            success_message = "Схема подключения успешно сохранена в БД" if self.is_editing_mode else "Новая схема подключения успешно добавлена в БД"
+            QMessageBox.information(self, "Успех", success_message)
 
+            # ОЧИЩАЕМ СОСТОЯНИЕ ПОСЛЕ УСПЕШНОГО СОХРАНЕНИЯ
             self.current_connection_type = ""
             self.editing_table = None
             self.is_editing_mode = False
 
+            # Очищаем поле ввода для следующей операции
+            self.ui.lineEdit_5.clear()
+
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Ошибка при сохранении: {str(e)}")
 
-    # Остальные методы остаются без изменений...
-    # def update_connections(self):
-    #     global data
-    #     ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-    #     data = cn.connect_to_bd(path, ip, user, passwd, 3)
-    #     data_standard = self._standardize_output(data)
-    #     table = ot.out_table(data_standard)
-    #     self.clear_layout(self.ui.gridLayout)
-    #     self.ui.gridLayout.addWidget(table, 0, 0)
-
-    # def data_update_connections(self):
-    #     global data
-    #     if len(data) > 1 and self.ui.pushButton_3.text() != 'Выполнено':
-    #         data_standard = self._standardize_output(data)
-    #         data_standard.to_csv('connection_info.csv', sep=',', index=False, encoding='utf-8')
-    #         self.ui.pushButton_3.setText('Выполнено')
-
     def get_chunk_info(self):
         global data_1
-        ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-        data_1 = cn.connect_to_bd(path, ip, user, passwd, 1)
-        # data_1_standard = self._standardize_output(data_1)
+        ip = self._get_ip()
+        if ip is None:
+            return
+        user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+        data_1 = cn.connect_to_bd(None, ip, user, passwd, 1)
         table = ot.out_table(data_1)
         self.clear_layout(self.ui.gridLayout)
         self.ui.gridLayout.addWidget(table, 0, 0)
 
-    # def csv_chunk_info(self):
-    #     global data_1
-    #     if self.ui.pushButton_5.text() != 'Выполнено':
-    #         data_1_standard = self._standardize_output(data_1)
-    #         data_1_standard.to_csv('chunk_info.csv', sep=',', index=False, encoding='utf-8')
-    #         self.ui.pushButton_5.setText('Выполнено')
-
     def get_chunk_connection_info(self):
         global data_2
-        ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-        data_2 = cn.connect_to_bd(path, ip, user, passwd, 2)
+        ip = self._get_ip()
+        if ip is None:
+            return
+        user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+        data_2 = cn.connect_to_bd(None, ip, user, passwd, 2)
         data_2_standard = self._standardize_output(data_2)
         table = ot.out_table(data_2_standard)
         self.clear_layout(self.ui.gridLayout)
         self.ui.gridLayout.addWidget(table, 0, 0)
-
-    # def get_all_connections(self):
-    #     global data_2
-    #     ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-    #     data_2 = cn.connect_to_bd(path, ip, user, passwd, 2)
-    #     data_2_standard = self._standardize_output(data_2)
-    #     table = ot.out_table(data_2_standard)
-    #     self.clear_layout(self.ui.gridLayout)
-    #     self.ui.gridLayout.addWidget(table, 0, 0)
 
     def get_chunk_connection_info_by_search(self):
+        """Поиск схемы подключения по точному соответствию"""
         global data_2
-        ip, user, passwd = self.ui.comboBox.currentText(), self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
-        type_con = self.ui.lineEdit_4.text()
-        data_2 = cn.connect_to_bd(path, ip, user, passwd, [type_con])
+        ip = self._get_ip()
+        if ip is None:
+            return
+        user, passwd = self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text()
+        type_con = self.ui.lineEdit_4.text().strip()
+
+        if not type_con:
+            QMessageBox.warning(self, "Ошибка", "Введите название схемы для поиска")
+            return
+
+        # Используем точное соответствие для поиска
+        data_2 = cn.connect_to_bd(None, ip, user, passwd, 4, type_con)
+
+        if len(data_2) == 0:
+            QMessageBox.information(self, "Результат поиска", f"Схема подключения '{type_con}' не найдена")
+            return
+
         data_2_standard = self._standardize_output(data_2)
         table = ot.out_table(data_2_standard)
         self.clear_layout(self.ui.gridLayout)
         self.ui.gridLayout.addWidget(table, 0, 0)
-
-    # def csv_chunk_connection_info(self):
-    #     global data_2
-    #     type_con = self.ui.lineEdit_4.text()
-    #     if self.ui.pushButton_7.text() != 'Выполнено':
-    #         data_2_standard = self._standardize_output(data_2)
-    #         data_2_standard.to_csv('chunk_connection_info(' + type_con + ').csv', sep=',', index=False,
-    #                                encoding='utf-8')
-    #         self.ui.pushButton_7.setText('Выполнено')
 
 
 if __name__ == "__main__":

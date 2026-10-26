@@ -3,12 +3,17 @@ import pandas as pd
 from sshtunnel import SSHTunnelForwarder
 
 
-def connect_to_bd(file, ip='192.168.4.16', user='sshu', passwd='q1w2e3r4', request_type=0):
+def connect_to_bd(data=None, ip='192.168.4.16', user='sshu', passwd='q1w2e3r4', request_type=0, connection_name=None):
     """
-    Принимает параметр file: str - путь к файлу.
-    Устанавливает соединение с базой данных через туннель, записывает данные из файла csv в таблицу
-    public.update_connections отображает данные в таблице update_connections после записи из этой таблицы
-    return result
+    Устанавливает соединение с базой данных через туннель
+    data: DataFrame - данные для загрузки в БД (для request_type=0)
+    request_type:
+        0 - загрузка данных в БД
+        1 - получение информации о чанках
+        2 - получение всех схем подключения
+        3 - обновление соединений
+        4 - поиск схемы по точному имени
+    connection_name: str - название схемы подключения (для поиска)
     """
     if user == '' or passwd == '':
         user, passwd = 'sshu', 'q1w2e3r4'
@@ -31,45 +36,33 @@ def connect_to_bd(file, ip='192.168.4.16', user='sshu', passwd='q1w2e3r4', reque
             conn = psycopg2.connect(**params)
             curs = conn.cursor()
 
-            # ПРОВЕРКА СТРУКТУРЫ ТАБЛИЦЫ
-            if file and request_type == 0:
-                curs.execute("""
-                    SELECT column_name, ordinal_position 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'update_connections' 
-                    AND table_schema = 'public'
-                    ORDER BY ordinal_position
-                """)
-                table_structure = curs.fetchall()
-                print("DEBUG: REAL table structure of public.update_connections:")
-                for col in table_structure:
-                    print(f"  {col[1]}: {col[0]}")
+            if request_type == 0 and data is not None:
+                # Прямая загрузка данных в БД без временных файлов
 
-                # Также проверим структуру через описание таблицы
-                curs.execute("""
-                    SELECT column_name, data_type 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'update_connections' 
-                    AND table_schema = 'public'
-                    ORDER BY ordinal_position
-                """)
-                full_structure = curs.fetchall()
-                print("DEBUG: Full table structure:")
-                for col in full_structure:
-                    print(f"  {col[0]} ({col[1]})")
+                # Сначала удаляем ВСЕ старые записи для этой схемы подключения
+                if len(data) > 0:
+                    connection_types = data['connection'].unique()
+                    for conn_type in connection_types:
+                        curs.execute("DELETE FROM public.update_connections WHERE connection = %s", (conn_type,))
 
-            if request_type == 0:
-                # Для добавления новых данных сначала очищаем таблицу
-                curs.execute("DELETE FROM public.update_connections")
-
-                if file:  # Проверяем, что файл передан
-                    # Также выведем содержимое CSV для отладки (убрали лишний импорт)
-                    df_check = pd.read_csv(file)
-                    print(f"DEBUG: CSV file columns: {df_check.columns.tolist()}")
-                    print(f"DEBUG: First row of CSV: {df_check.iloc[0].tolist() if len(df_check) > 0 else 'Empty'}")
-
-                    sql = "COPY public.update_connections FROM STDIN DELIMITER ',' CSV HEADER"
-                    curs.copy_expert(sql, open(file, "r", encoding='utf-8'))
+                # Вставляем новые данные (только те, что остались в таблице)
+                for _, row in data.iterrows():
+                    curs.execute("""
+                        INSERT INTO public.update_connections 
+                        (connection, chunk, position, length, io, reg_num, method, chunk_offset, is_virtual, is_compressed)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        row['connection'],
+                        row['chunk'],
+                        row['position'],
+                        row['length'],
+                        row['io'],
+                        row['reg_num'],
+                        row['method'],
+                        row['chunk_offset'],
+                        row['is_virtual'],
+                        row['is_compressed']
+                    ))
 
                 # Вызываем функцию обновления соединений
                 curs.execute("SELECT * FROM _system.update_connections()")
@@ -91,8 +84,9 @@ def connect_to_bd(file, ip='192.168.4.16', user='sshu', passwd='q1w2e3r4', reque
                 column_names = [elt[0] for elt in curs.description]
                 df = pd.DataFrame(curs.fetchall(), columns=column_names)
 
-            elif type(request_type) == list:
-                curs.callproc('_system.get_connection_chunk', request_type)
+            elif request_type == 4 and connection_name:
+                # ТОЧНЫЙ ПОИСК ПО ИМЕНИ СХЕМЫ
+                curs.execute("SELECT * FROM _system.get_connection_chunk(%s)", (connection_name,))
                 column_names = [elt[0] for elt in curs.description]
                 df = pd.DataFrame(curs.fetchall(), columns=column_names)
 
@@ -107,4 +101,4 @@ def connect_to_bd(file, ip='192.168.4.16', user='sshu', passwd='q1w2e3r4', reque
 
 
 if __name__ == "__main__":
-    print(connect_to_bd("connection_utility.csv", '192.168.4.61', 'sshu', 'q1w2e3r4', 2).columns)
+    print(connect_to_bd(None, '192.168.4.61', 'sshu', 'q1w2e3r4', 2).columns)
