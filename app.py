@@ -51,27 +51,23 @@ class SimpleTableWidget(QTableWidget):
         # Настраиваем заголовки
         header = self.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(QHeaderView.Interactive)  # Позволяем менять размер
+        header.setSectionResizeMode(QHeaderView.Interactive)
 
         # Колонка "Действия" - фиксированная
         header.setSectionResizeMode(self.columnCount() - 1, QHeaderView.Fixed)
         self.setColumnWidth(self.columnCount() - 1, 110)
 
-        # Первичный расчет ширины
         self.resizeColumnsToContents()
 
     def resizeEvent(self, event):
         """Умное распределение ширины при изменении размера окна"""
         super().resizeEvent(event)
 
-        # 1. Сначала сжимаем все колонки по минимуму (по тексту)
         self.resizeColumnsToContents()
 
-        # 2. Считаем, сколько места осталось
         total_width = sum(self.columnWidth(i) for i in range(self.columnCount()))
         available_width = self.viewport().width()
 
-        # 3. Если места больше, чем нужно, распределяем его между connection_type и chunk_name
         if available_width > total_width:
             extra_space = available_width - total_width
             half_extra = extra_space // 2
@@ -82,7 +78,6 @@ class SimpleTableWidget(QTableWidget):
                     chunk_idx = i
                     break
 
-            # Добавляем по половине свободного места к connection_type (индекс 0) и chunk_name
             self.setColumnWidth(0, self.columnWidth(0) + half_extra)
             if chunk_idx != -1:
                 self.setColumnWidth(chunk_idx, self.columnWidth(chunk_idx) + half_extra)
@@ -107,7 +102,6 @@ class SimpleTableWidget(QTableWidget):
         return container
 
     def create_centered_checkbox(self, value):
-        """Создает чекбокс, выровненный по центру ячейки"""
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -119,6 +113,14 @@ class SimpleTableWidget(QTableWidget):
 
         layout.addWidget(checkbox)
         return container
+
+    def format_value(self, val):
+        """Очищает числа от лишних нулей (например, 0.0 -> 0)"""
+        if pd.isna(val):
+            return ""
+        if isinstance(val, float) and val.is_integer():
+            return str(int(val))
+        return str(val)
 
     def setData(self, data):
         headers = data.columns.values.tolist()
@@ -138,7 +140,6 @@ class SimpleTableWidget(QTableWidget):
                     combo = QComboBox()
                     combo.setEditable(True)
                     combo.setInsertPolicy(QComboBox.NoInsert)
-                    # Убираем жесткий minimumWidth, чтобы он мог сжиматься
 
                     if self.chunk_data is not None and len(self.chunk_data) > 0:
                         for _, chunk_row in self.chunk_data.iterrows():
@@ -173,7 +174,8 @@ class SimpleTableWidget(QTableWidget):
                     )
                     self.setCellWidget(i, j, combo)
                 else:
-                    item = QTableWidgetItem(str(value))
+                    clean_val = self.format_value(value)
+                    item = QTableWidgetItem(clean_val)
                     item.setFlags(item.flags() | Qt.ItemIsEditable)
                     self.setItem(i, j, item)
 
@@ -194,9 +196,9 @@ class SimpleTableWidget(QTableWidget):
         len_item = self.item(row_idx, self.get_column_index('length'))
         io_item = self.item(row_idx, self.get_column_index('io'))
 
-        if pos_item: pos_item.setText(str(chunk_row_data.get('position', '')))
-        if len_item: len_item.setText(str(chunk_row_data.get('length', '')))
-        if io_item: io_item.setText(str(chunk_row_data.get('io', '')))
+        if pos_item: pos_item.setText(self.format_value(chunk_row_data.get('position', '')))
+        if len_item: len_item.setText(self.format_value(chunk_row_data.get('length', '')))
+        if io_item: io_item.setText(self.format_value(chunk_row_data.get('io', '')))
 
     def get_column_index(self, column_name):
         headers = [self.horizontalHeaderItem(i).text() for i in range(self.columnCount() - 1)]
@@ -387,11 +389,19 @@ class MainApp(QMainWindow):
 
     def _standardize_output(self, data):
         if data is None or len(data) == 0: return data
+
         columns_to_remove = ['connection_type_id', 'chunk_id']
         data = data.drop(columns=[col for col in columns_to_remove if col in data.columns], errors='ignore')
         reverse_mapping = {'connection': 'connection_type', 'chunk': 'chunk_name', 'chunk_offset': 'offset',
                            'is_compressed': 'is_commpressed'}
         data = data.rename(columns=reverse_mapping)
+
+        # Принудительно преобразуем числовые колонки в целые числа
+        numeric_cols = ['position', 'length', 'io', 'offset', 'reg_num', 'method']
+        for col in numeric_cols:
+            if col in data.columns:
+                data[col] = pd.to_numeric(data[col], errors='coerce').fillna(0)
+                data[col] = data[col].apply(lambda x: int(x) if float(x).is_integer() else x)
 
         result = pd.DataFrame()
         for col in STANDARD_COLUMNS:
