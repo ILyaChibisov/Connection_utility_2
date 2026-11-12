@@ -85,22 +85,25 @@ class Ui_MainWindow(object):
         self.main_layout.addWidget(self.gridLayoutWidget, 1)
 
         # ==========================================
-        # 4. НИЖНЯЯ ПАНЕЛЬ (Только сохранение)
+        # 4. НИЖНЯЯ ПАНЕЛЬ (Действия с текущей таблицей)
         # ==========================================
         self.save_layout = QHBoxLayout()
         self.save_layout.setSpacing(10)
 
-        self.pushButton_13 = QPushButton("💾 Сохранить изменения")
-        self.pushButton_12 = QPushButton("💾 Применить изменения")
+        self.pushButton_13 = QPushButton("💾 Сохранить схему")
+        self.pushButton_13.setMinimumWidth(150)
+        self.pushButton_13.hide()  # Скрыта по умолчанию
 
-        # Добавляем кнопку "Добавить строку" в этот же ряд, но скрываем её по умолчанию
-        # Она будет показываться только при создании/редактировании схемы
         self.pushButton_add_row = QPushButton("➕ Добавить строку")
         self.pushButton_add_row.hide()
 
+        self.pushButton_cancel = QPushButton("❌ Отмена")
+        self.pushButton_cancel.setMinimumWidth(100)
+        self.pushButton_cancel.hide()
+
         self.save_layout.addWidget(self.pushButton_13)
-        self.save_layout.addWidget(self.pushButton_12)
         self.save_layout.addWidget(self.pushButton_add_row)
+        self.save_layout.addWidget(self.pushButton_cancel)
         self.save_layout.addStretch()
 
         self.main_layout.addLayout(self.save_layout)

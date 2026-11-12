@@ -26,24 +26,99 @@ class SimpleTableWidget(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(45)
 
-        # Увеличиваем высоту строк, чтобы кнопки влезали идеально
-        self.verticalHeader().setDefaultSectionSize(38)
-
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.setShowGrid(True)
 
         self.setStyleSheet("""
             QTableWidget {
                 gridline-color: #dcdcdc;
             }
+            QTableWidget::item {
+                padding: 2px;
+            }
             QTableWidget::item:selected {
                 background-color: #e0e0e0;
                 color: #000000;
             }
+            QHeaderView::section {
+                padding: 4px;
+            }
         """)
 
         self.setData(data)
+
+        # Настраиваем заголовки
+        header = self.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.Interactive)  # Позволяем менять размер
+
+        # Колонка "Действия" - фиксированная
+        header.setSectionResizeMode(self.columnCount() - 1, QHeaderView.Fixed)
+        self.setColumnWidth(self.columnCount() - 1, 110)
+
+        # Первичный расчет ширины
+        self.resizeColumnsToContents()
+
+    def resizeEvent(self, event):
+        """Умное распределение ширины при изменении размера окна"""
+        super().resizeEvent(event)
+
+        # 1. Сначала сжимаем все колонки по минимуму (по тексту)
+        self.resizeColumnsToContents()
+
+        # 2. Считаем, сколько места осталось
+        total_width = sum(self.columnWidth(i) for i in range(self.columnCount()))
+        available_width = self.viewport().width()
+
+        # 3. Если места больше, чем нужно, распределяем его между connection_type и chunk_name
+        if available_width > total_width:
+            extra_space = available_width - total_width
+            half_extra = extra_space // 2
+
+            chunk_idx = -1
+            for i in range(self.columnCount()):
+                if self.horizontalHeaderItem(i).text() == 'chunk_name':
+                    chunk_idx = i
+                    break
+
+            # Добавляем по половине свободного места к connection_type (индекс 0) и chunk_name
+            self.setColumnWidth(0, self.columnWidth(0) + half_extra)
+            if chunk_idx != -1:
+                self.setColumnWidth(chunk_idx, self.columnWidth(chunk_idx) + half_extra)
+
+    def create_delete_button(self, row_idx):
+        container = QWidget()
+        container.setStyleSheet("background-color: transparent;")
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setAlignment(Qt.AlignCenter)
+
+        btn = QPushButton("Удалить")
+        btn.setFixedSize(90, 28)
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffcccc; color: #990000; border-radius: 4px; border: 1px solid #ff9999; font-weight: bold; padding: 0px; 
+            }
+            QPushButton:hover { background-color: #ff9999; }
+        """)
+        btn.clicked.connect(lambda checked, r=row_idx: self.delete_row(r))
+        layout.addWidget(btn)
+        return container
+
+    def create_centered_checkbox(self, value):
+        """Создает чекбокс, выровненный по центру ячейки"""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignCenter)
+
+        checkbox = QCheckBox()
+        if str(value).lower() in ['true', '1', 'yes', 't']:
+            checkbox.setChecked(True)
+
+        layout.addWidget(checkbox)
+        return container
 
     def setData(self, data):
         headers = data.columns.values.tolist()
@@ -57,22 +132,13 @@ class SimpleTableWidget(QTableWidget):
                 header_name = headers[j]
 
                 if header_name in ['is_virtual', 'is_commpressed']:
-                    checkbox = QCheckBox()
-                    checkbox.setStyleSheet("QCheckBox { margin-left: 50%; }")
-                    if str(value).lower() in ['true', '1', 'yes', 't']:
-                        checkbox.setChecked(True)
-
-                    checkbox_widget = QWidget()
-                    checkbox_layout = QHBoxLayout(checkbox_widget)
-                    checkbox_layout.addWidget(checkbox)
-                    checkbox_layout.setAlignment(Qt.AlignCenter)
-                    checkbox_layout.setContentsMargins(0, 0, 0, 0)
-                    self.setCellWidget(i, j, checkbox_widget)
+                    self.setCellWidget(i, j, self.create_centered_checkbox(value))
 
                 elif header_name == 'chunk_name':
                     combo = QComboBox()
                     combo.setEditable(True)
                     combo.setInsertPolicy(QComboBox.NoInsert)
+                    # Убираем жесткий minimumWidth, чтобы он мог сжиматься
 
                     if self.chunk_data is not None and len(self.chunk_data) > 0:
                         for _, chunk_row in self.chunk_data.iterrows():
@@ -80,9 +146,7 @@ class SimpleTableWidget(QTableWidget):
                             pos = chunk_row.get('position', '')
                             length = chunk_row.get('length', '')
                             io = chunk_row.get('io', '')
-
-                            display_str = f"{name} (pos:{pos}, len:{length}, io:{io})"
-                            combo.addItem(display_str)
+                            combo.addItem(f"{name} (pos:{pos}, len:{length}, io:{io})")
                             combo.setItemData(combo.count() - 1, chunk_row.to_dict(), Qt.UserRole)
 
                     current_val_str = str(value).strip()
@@ -93,7 +157,6 @@ class SimpleTableWidget(QTableWidget):
                             if item_text == current_val_str:
                                 found_idx = idx
                                 break
-
                         if found_idx >= 0:
                             combo.setCurrentIndex(found_idx)
                         else:
@@ -114,41 +177,13 @@ class SimpleTableWidget(QTableWidget):
                     item.setFlags(item.flags() | Qt.ItemIsEditable)
                     self.setItem(i, j, item)
 
-            # Создаем виджет-контейнер для кнопки, чтобы она ровно стояла по центру
-            btn_container = QWidget()
-            btn_layout = QHBoxLayout(btn_container)
-            btn_layout.setContentsMargins(4, 4, 4, 4)  # Небольшие отступы от краев ячейки
-
-            delete_button = QPushButton("Удалить")
-            delete_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #ffcccc; 
-                    color: #990000; 
-                    border-radius: 4px; 
-                    padding: 2px 8px;
-                    border: 1px solid #ff9999;
-                }
-                QPushButton:hover {
-                    background-color: #ff9999;
-                }
-            """)
-            delete_button.clicked.connect(lambda checked, row_idx=i: self.delete_row(row_idx))
-
-            btn_layout.addWidget(delete_button)
-            self.setCellWidget(i, len(headers), btn_container)
+            self.setCellWidget(i, len(headers), self.create_delete_button(i))
 
     def delete_row(self, row_idx):
         self.deleted_rows.add(row_idx)
         self.removeRow(row_idx)
         for row in range(self.rowCount()):
-            btn_container = self.cellWidget(row, self.columnCount() - 1)
-            if btn_container:
-                delete_button = btn_container.layout().itemAt(0).widget()
-                try:
-                    delete_button.clicked.disconnect()
-                except:
-                    pass
-                delete_button.clicked.connect(lambda checked, r=row: self.delete_row(r))
+            self.setCellWidget(row, self.columnCount() - 1, self.create_delete_button(row))
 
     def on_chunk_changed(self, row_idx, index, combo_widget):
         if index < 0: return
@@ -177,15 +212,7 @@ class SimpleTableWidget(QTableWidget):
 
         for col, header in enumerate(headers):
             if header in ['is_virtual', 'is_commpressed']:
-                checkbox = QCheckBox()
-                checkbox.setStyleSheet("QCheckBox { margin-left: 50%; }")
-                checkbox_widget = QWidget()
-                checkbox_layout = QHBoxLayout(checkbox_widget)
-                checkbox_layout.addWidget(checkbox)
-                checkbox_layout.setAlignment(Qt.AlignCenter)
-                checkbox_layout.setContentsMargins(0, 0, 0, 0)
-                self.setCellWidget(row_index, col, checkbox_widget)
-
+                self.setCellWidget(row_index, col, self.create_centered_checkbox("false"))
             elif header == 'chunk_name':
                 combo = QComboBox()
                 combo.setEditable(True)
@@ -214,28 +241,7 @@ class SimpleTableWidget(QTableWidget):
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 self.setItem(row_index, col, item)
 
-        # Контейнер для кнопки удаления
-        btn_container = QWidget()
-        btn_layout = QHBoxLayout(btn_container)
-        btn_layout.setContentsMargins(4, 4, 4, 4)
-
-        delete_button = QPushButton("Удалить")
-        delete_button.setStyleSheet("""
-            QPushButton {
-                background-color: #ffcccc; 
-                color: #990000; 
-                border-radius: 4px; 
-                padding: 2px 8px;
-                border: 1px solid #ff9999;
-            }
-            QPushButton:hover {
-                background-color: #ff9999;
-            }
-        """)
-        delete_button.clicked.connect(lambda checked, row_idx=row_index: self.delete_row(row_idx))
-
-        btn_layout.addWidget(delete_button)
-        self.setCellWidget(row_index, len(headers), btn_container)
+        self.setCellWidget(row_index, len(headers), self.create_delete_button(row_index))
 
     def getData(self):
         data_list = []
@@ -303,8 +309,9 @@ class MainApp(QMainWindow):
         self.ui.pushButton_8.clicked.connect(self.create_new_connection)
         self.ui.pushButton_9.clicked.connect(self.refactor_connection)
         self.ui.pushButton_11.clicked.connect(self.get_chunk_connection_info_by_search)
-        self.ui.pushButton_12.clicked.connect(self.save_connection)
+
         self.ui.pushButton_13.clicked.connect(self.save_connection)
+        self.ui.pushButton_cancel.clicked.connect(self.cancel_editing)
 
         for ip in ip_list:
             self.ui.comboBox.addItem(ip)
@@ -341,7 +348,7 @@ class MainApp(QMainWindow):
             }
             QHeaderView::section { 
                 background-color: #e8e8e8; 
-                padding: 6px; 
+                padding: 4px; 
                 border: none; 
                 border-bottom: 1px solid #c0c0c0; 
                 border-right: 1px solid #dcdcdc; 
@@ -349,12 +356,27 @@ class MainApp(QMainWindow):
                 color: #333; 
             }
             QTableWidget::item { 
-                padding: 4px; 
+                padding: 2px; 
                 color: #000; 
                 border-right: 1px solid #dcdcdc; 
                 border-bottom: 1px solid #dcdcdc;
             }
         """)
+
+    def reset_interface(self):
+        self.clear_layout()
+        self.ui.pushButton_13.hide()
+        self.ui.pushButton_add_row.hide()
+        self.ui.pushButton_cancel.hide()
+        self.editing_table = None
+        self.current_connection_type = ""
+        self.is_editing_mode = False
+
+    def cancel_editing(self):
+        reply = QMessageBox.question(self, 'Отмена', 'Вы уверены, что хотите отменить изменения?',
+                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.reset_interface()
 
     def _get_ip(self):
         ip = self.ui.comboBox.currentText().strip()
@@ -427,6 +449,9 @@ class MainApp(QMainWindow):
         self.ui.gridLayout.addWidget(self.editing_table)
 
         self.ui.pushButton_add_row.show()
+        self.ui.pushButton_13.show()
+        self.ui.pushButton_cancel.show()
+
         try:
             self.ui.pushButton_add_row.clicked.disconnect()
         except:
@@ -455,6 +480,9 @@ class MainApp(QMainWindow):
         self.ui.gridLayout.addWidget(self.editing_table)
 
         self.ui.pushButton_add_row.show()
+        self.ui.pushButton_13.show()
+        self.ui.pushButton_cancel.show()
+
         try:
             self.ui.pushButton_add_row.clicked.disconnect()
         except:
@@ -496,6 +524,8 @@ class MainApp(QMainWindow):
         self.ui.gridLayout.addWidget(table)
 
         self.ui.pushButton_add_row.hide()
+        self.ui.pushButton_13.hide()
+        self.ui.pushButton_cancel.hide()
 
         QMessageBox.information(self, "Успех", "Схема успешно сохранена!")
         self.editing_table = None
@@ -506,6 +536,8 @@ class MainApp(QMainWindow):
         data = cn.connect_to_bd(None, ip, self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text(), 1)
         self.clear_layout()
         self.ui.pushButton_add_row.hide()
+        self.ui.pushButton_13.hide()
+        self.ui.pushButton_cancel.hide()
         self.ui.gridLayout.addWidget(ot.out_table(data))
 
     def get_chunk_connection_info(self):
@@ -514,6 +546,8 @@ class MainApp(QMainWindow):
         data = cn.connect_to_bd(None, ip, self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text(), 2)
         self.clear_layout()
         self.ui.pushButton_add_row.hide()
+        self.ui.pushButton_13.hide()
+        self.ui.pushButton_cancel.hide()
         self.ui.gridLayout.addWidget(ot.out_table(self._standardize_output(data)))
 
     def get_chunk_connection_info_by_search(self):
@@ -527,6 +561,8 @@ class MainApp(QMainWindow):
         data = cn.connect_to_bd(None, ip, self.ui.lineEdit_2.text(), self.ui.lineEdit_3.text(), 4, name)
         self.clear_layout()
         self.ui.pushButton_add_row.hide()
+        self.ui.pushButton_13.hide()
+        self.ui.pushButton_cancel.hide()
         self.ui.gridLayout.addWidget(ot.out_table(self._standardize_output(data)))
 
 
